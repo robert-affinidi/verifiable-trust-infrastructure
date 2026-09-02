@@ -2,6 +2,117 @@
 
 Notable changes to the published crates. Generated from conventional commits by
 [git-cliff](https://git-cliff.org) when a release is cut — do not edit by hand.
+## [0.32.4](https://github.com/robert-affinidi/verifiable-trust-infrastructure/compare/vta-sdk-v0.32.3...vta-sdk-v0.32.4) — 2026-09-02
+
+
+### Added
+
+- **vta**: Implement vta/credentials/list, and check the vault/credentials family ([#1235](https://github.com/robert-affinidi/verifiable-trust-infrastructure/pull/1235))
+
+* feat(vta): implement vta/credentials/list, and check the vault/credentials family
+
+  `vta/credentials` served `issue` and `revoke` and nothing else, so an issuer
+  could not ask its own agent what it had issued. The `credentialId` that
+  `revoke` is keyed on is returned exactly once, in the `issue` response; a
+  caller that did not record it at that moment could not recover it at all.
+
+  Specified upstream as `vta/credentials/list/0.1`
+  (trustoverip/dtgwg-trust-tasks-tf#342). This implements it — a read over
+  records that already exist. `IssuedCredentialRecord` carries the id, holder,
+  both instants and the revocation instant and reason, and revocation is a
+  tombstone rather than a delete, so a revoked credential is still there to list.
+  No new storage.
+
+  Bodies are never returned. `vault/list/0.1` states the rule this follows —
+  list enumerates, release uses — and `summarise` is the one place the projection
+  happens, so "a summary never carries the credential" is enforced rather than
+  remembered. `status` is derived at read time with `revoked` beating `expired`:
+  reporting a revoked credential as merely expired would hide that somebody
+  acted, and a stored status is wrong one second after it is written.
+
+  Gated on `require_manage`, not the Admin-plus-step-up its mutating siblings
+  use. An operator who may read the ACL and the policy set may read what their
+  own agent issued — same category of question — and a step-up that fires on
+  every page of a list is one people learn to clear without reading. The read is
+  audited anyway: "who enumerated the issuance log" is what an incident review
+  asks, and nothing else would record it.
+
+  ## Bumping trust-tasks-rs to 0.17.4 surfaced the vault/credentials family
+
+  Those eight URIs have been dispatched since before they had a specification.
+  Specifying them (#338, shipped in 0.17.4) made them *published*, which is what
+  finally let the conformance sweep see them — and it found two real defects in
+  shapes that had never been checked against anything:
+
+  - **`ReceiveBody` serialized `credentialBase64: null`.** `#[serde(default)]`
+    without `skip_serializing_if` leaves an unset member as `null`, and the
+    schema's `oneOf` counts a null member as *present* — so the body matched
+    neither branch. Same defect class as the sibling registry's
+    `payload_null_census`.
+  - **`force` was accepted by four verbs that ignore it.** `CredLifecycleBody`
+    was shared across archive, unarchive, delete, restore and purge, but only
+    `delete` reads `force`. A caller asking for something stronger than the verb
+    it named got the weaker thing and a success. `delete` now has its own body;
+    the other four refuse the member, as their schemas always said they should.
+
+  Three debt ratchets moved in the right direction as a consequence, each
+  discharged by specification rather than deletion: eight entries out of
+  `UNSPECCED_DISPATCHED_URIS`, one out of the producer-payload census's
+  `UNPUBLISHED` list (so that payload is now validated rather than skipped), and
+  vtc-service's bound-URI count from 12 to 4 — what remains is the four
+  *secrets*-store lifecycle verbs, which still have no spec.
+
+  ## Tests
+
+  `page_rows` is split out of `list_issued` and unit-tested because the cursor is
+  where a bug hides: it is the last storage key of the previous page and
+  resumption is strictly after it, so a credential issued mid-walk cannot shift a
+  window and skip a row nobody has seen. That case is a test. So are the status
+  precedence, an unreadable expiry reading as active rather than expired, and
+  that a serialized summary contains no credential.
+
+  `IssuedCredentialSummary` is the census's first `NO_EXT_BY_DESIGN` entry: it is
+  a list row rather than a payload root, and its published schema declares no
+  `ext` slot, so adding the field would make this crate emit documents the schema
+  rejects — the inverse of the defect that census exists to catch.
+
+
+
+### Fixed
+
+- **sdk**: Accept the `ext` member every payload schema declares ([#1231](https://github.com/robert-affinidi/verifiable-trust-infrastructure/pull/1231))
+
+SPEC §4.5.1 gives every Trust Task payload an `ext` slot, and the published
+  schemas declare it — `acl/list/0.1` lists `ext` among its properties, as do
+  `policy/list/0.2`, every `vta/memory/*` body, `app-state` writes, config show
+  and patch, and both credential-issuance bodies.
+
+  Sixteen `deny_unknown_fields` structs had no field for it, so a producer doing
+  exactly what the schema permits had its whole document rejected:
+
+      malformed request: payload parse: unknown field `ext`, expected one of
+      `role`, `scope`, `direction`, `subjectPrefix`, `pageSize`, `cursor`
+
+  Seven sibling structs already carry `ext`, with the reasoning written out on
+  each; this completes that work rather than starting it. `deny_unknown_fields`
+  stays: carrying `ext` explicitly is what keeps a *typo* refused, which is the
+  guard that clause was there for, while letting through the one member the spec
+  says is always allowed.
+
+  Found from a browser-based VTA management console: its Access and Policy panes
+  died outright, and the operator was shown a parse error naming a field the
+  spec had told the client it could send. Nothing caught it earlier because
+  whether a caller trips this is decided entirely by whether it populates `ext`
+  — the conformance table exercises the members its fixtures set, and this
+  defect lives in the member they leave unset.
+
+  So the guard is a census over the source rather than another fixture:
+  `payload_ext_census.rs` fails on any `deny_unknown_fields` type under
+  `protocols/` that carries no `ext`, with an exceptions list that has to state
+  a reason. Verified to fail by reverting one struct.
+
+
+
 ## [0.32.3](https://github.com/OpenVTC/verifiable-trust-infrastructure/compare/vta-sdk-v0.32.2...vta-sdk-v0.32.3) — 2026-09-01
 
 

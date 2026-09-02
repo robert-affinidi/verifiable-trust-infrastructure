@@ -2,6 +2,239 @@
 
 Notable changes to the published crates. Generated from conventional commits by
 [git-cliff](https://git-cliff.org) when a release is cut — do not edit by hand.
+## [0.23.5](https://github.com/robert-affinidi/verifiable-trust-infrastructure/compare/vta-service-v0.23.4...vta-service-v0.23.5) — 2026-09-02
+
+
+### Added
+
+- **vta**: Implement vta/credentials/list, and check the vault/credentials family ([#1235](https://github.com/robert-affinidi/verifiable-trust-infrastructure/pull/1235))
+
+* feat(vta): implement vta/credentials/list, and check the vault/credentials family
+
+  `vta/credentials` served `issue` and `revoke` and nothing else, so an issuer
+  could not ask its own agent what it had issued. The `credentialId` that
+  `revoke` is keyed on is returned exactly once, in the `issue` response; a
+  caller that did not record it at that moment could not recover it at all.
+
+  Specified upstream as `vta/credentials/list/0.1`
+  (trustoverip/dtgwg-trust-tasks-tf#342). This implements it — a read over
+  records that already exist. `IssuedCredentialRecord` carries the id, holder,
+  both instants and the revocation instant and reason, and revocation is a
+  tombstone rather than a delete, so a revoked credential is still there to list.
+  No new storage.
+
+  Bodies are never returned. `vault/list/0.1` states the rule this follows —
+  list enumerates, release uses — and `summarise` is the one place the projection
+  happens, so "a summary never carries the credential" is enforced rather than
+  remembered. `status` is derived at read time with `revoked` beating `expired`:
+  reporting a revoked credential as merely expired would hide that somebody
+  acted, and a stored status is wrong one second after it is written.
+
+  Gated on `require_manage`, not the Admin-plus-step-up its mutating siblings
+  use. An operator who may read the ACL and the policy set may read what their
+  own agent issued — same category of question — and a step-up that fires on
+  every page of a list is one people learn to clear without reading. The read is
+  audited anyway: "who enumerated the issuance log" is what an incident review
+  asks, and nothing else would record it.
+
+  ## Bumping trust-tasks-rs to 0.17.4 surfaced the vault/credentials family
+
+  Those eight URIs have been dispatched since before they had a specification.
+  Specifying them (#338, shipped in 0.17.4) made them *published*, which is what
+  finally let the conformance sweep see them — and it found two real defects in
+  shapes that had never been checked against anything:
+
+  - **`ReceiveBody` serialized `credentialBase64: null`.** `#[serde(default)]`
+    without `skip_serializing_if` leaves an unset member as `null`, and the
+    schema's `oneOf` counts a null member as *present* — so the body matched
+    neither branch. Same defect class as the sibling registry's
+    `payload_null_census`.
+  - **`force` was accepted by four verbs that ignore it.** `CredLifecycleBody`
+    was shared across archive, unarchive, delete, restore and purge, but only
+    `delete` reads `force`. A caller asking for something stronger than the verb
+    it named got the weaker thing and a success. `delete` now has its own body;
+    the other four refuse the member, as their schemas always said they should.
+
+  Three debt ratchets moved in the right direction as a consequence, each
+  discharged by specification rather than deletion: eight entries out of
+  `UNSPECCED_DISPATCHED_URIS`, one out of the producer-payload census's
+  `UNPUBLISHED` list (so that payload is now validated rather than skipped), and
+  vtc-service's bound-URI count from 12 to 4 — what remains is the four
+  *secrets*-store lifecycle verbs, which still have no spec.
+
+  ## Tests
+
+  `page_rows` is split out of `list_issued` and unit-tested because the cursor is
+  where a bug hides: it is the last storage key of the previous page and
+  resumption is strictly after it, so a credential issued mid-walk cannot shift a
+  window and skip a row nobody has seen. That case is a test. So are the status
+  precedence, an unreadable expiry reading as active rather than expired, and
+  that a serialized summary contains no credential.
+
+  `IssuedCredentialSummary` is the census's first `NO_EXT_BY_DESIGN` entry: it is
+  a list row rather than a payload root, and its published schema declares no
+  `ext` slot, so adding the field would make this crate emit documents the schema
+  rejects — the inverse of the defect that census exists to catch.
+
+- **acl**: Add MemoryRead/MemoryWrite and gate the memory tasks on them ([#1234](https://github.com/robert-affinidi/verifiable-trust-infrastructure/pull/1234))
+
+There was no read-only grant on agent memory. The gate in
+  trust_tasks/memory.rs was auth.require_context and nothing else, and a
+  context is binary: any DID that could reach one could also write and
+  delete every memory in it. So an operator could not give an agent
+  read-only access to their own memory, and the --read-only flag in
+  vta-mcp's guard is a client-side glob filter that a caller talking to the
+  VTA directly never encounters.
+
+  The published specification already assumes the split exists.
+  specs/vta/memory/delete/0.1/spec.md reasons about "a VTA whose write
+  capability is granted more freely than its read capability", and about
+  callers holding write without read. There was no read capability and no
+  write capability; there was a context. The ACL supplied nothing finer
+  either - the act axis is (role, allowed_contexts) decoded to a
+  three-valued ActScope, a where with no what.
+
+  Adds Capability::{MemoryRead, MemoryWrite}, wires them through
+  derived_capabilities_for_role, and gates the three handlers. Legacy rows
+  carry no explicit capability set and fall back to the derived mapping, so
+  the roles that write memory today keep writing it.
+
+  Deliberate behaviour changes, both tightenings:
+
+  - reader loses memory write. A read-only consumer of a context should not
+    be able to rewrite the memories in it.
+  - monitor loses memory access entirely. It is the least-privileged role
+    and the Default for AuthClaims, precisely so a fixture that leaks past
+    its expected reach lands somewhere harmless - which it did not, while
+    memory was context-gated alone.
+
+  application keeps both, deliberately and with a test saying why:
+  vta-agent-memory grants exactly that role so the memory service is not
+  the user, and every existing install would otherwise stop saving.
+
+  The capability is checked before the context, so a caller missing it
+  cannot use the reason text to probe which contexts exist.
+
+  Note the canonical Capability enum in the trust-tasks registry
+  (device/_shared/0.1) is already behind this crate - it carries neither
+  sign-trust-task nor credential-write. A spec PR reconciling all four
+  follows separately; this change does not widen that gap unilaterally so
+  much as make it worth closing.
+
+  Implements the orthogonal fix called out in
+  docs/05-design-notes/data-rooms.md 11.1.
+
+
+
+### Fixed
+
+- **vta**: Audit every refusal, and make the census that missed them measure ([#1238](https://github.com/robert-affinidi/verifiable-trust-infrastructure/pull/1238))
+
+#1236 shipped a census reporting 72 consequential tasks that "audit on
+  success only", with a budget and a note that fixing them would be ~60
+  handlers in one diff. The number was right and everything else was wrong.
+
+  **The census was measuring one gate, 72 times.** It built each document
+  with `TrustTask::new(id, type_uri, payload)`. That envelope carries no
+  `issuer`, `recipient`, `issuedAt` or `proof`, and the spine enforces all
+  four before dispatch — so all 72 documents were refused `422 expired` at
+  the freshness check and **not one handler ever ran**. One unaudited code
+  path, exercised once per task, reported as a per-handler finding.
+
+  The `silent_on_success` invariant beside it passed *vacuously* for the
+  same reason: nothing succeeded, so nothing could succeed silently.
+
+  ## What the gate was hiding
+
+  The path those 72 documents took records nothing, for any task in any
+  family. `dispatch_trust_task_validated` has a dozen early returns —
+  expiry, wrong recipient, replay, schema validation, proof failure, the
+  policy gate — and the blanket vault audit sat a few lines above that
+  function's final `return`, so it saw the outcomes that reached the bottom
+  and none that did not. Its own doc-comment claimed "read or write, success
+  or denied — exactly one persisted audit row"; that was true only of
+  denials the *handler* raised.
+
+  So a document refused at the envelope gate left no trace at all. That is
+  the refusal an incident review most wants: not "the handler said no", but
+  "something arrived claiming to be this, signed like this, and never got
+  that far".
+
+  ## The fix is one frame, not sixty handlers
+
+  `DispatchAudit` is captured in `dispatch_trust_task_inner` and recorded
+  around the call to `dispatch_trust_task_validated`. No early return inside
+  can bypass it, and a fourteenth added tomorrow inherits it.
+
+  Two dispositions, to avoid doubling the trail:
+
+  - **vault family** — every outcome, as before; behaviour unchanged.
+  - **everything else consequential** — refusals only. A non-vault success
+    is audited by its handler; recording it here too would duplicate every
+    row.
+
+  Non-vault refusals record as `task.refused` with the URI as the resource,
+  rather than under the operation's name. The handler vocabulary does not
+  follow the URI (`acl/grant/0.1` audits as `acl.create`, `keys/create/0.1`
+  as `key.create`), so matching it would need an 84-entry table that goes
+  stale invisibly — and it would be filing a lie: these refusals happen
+  before dispatch, so no ACL was consulted and no key was touched. Exactly
+  one task (`task-consent/decision/0.1`) audits its own refusal and now gets
+  a second row; the other ten already-audited refusals are vault-family and
+  take the unchanged branch.
+
+  ## The census now measures what it claims
+
+  Conforming envelopes: issued now, addressed to this agent, issued by the
+  DID the claims authenticate, signed. Documents reach handlers.
+
+  With that, `silent_on_failure` is **0** — down from 50, which is what the
+  number actually was once the gate stopped swallowing the run. The budget
+  is replaced by a hard invariant, because a gap closed structurally does
+  not need a ratchet. Verified non-vacuous: disabling the refusal branch
+  fails the census with exactly those 50.
+
+  `silent_on_success` is 2, and neither is a defect. `auth/revoke-session`
+  and `consent/revoke` take documented no-op arms against the census's empty
+  store — "a revoke that deleted nothing is not a state change worth a
+  line". They go in a new `NO_AUDIT_WHEN_NO_OP` list rather than
+  `NO_AUDIT_BY_DESIGN`, because that list claims no trail is *ever* correct
+  and these audit fine when they change something. Conflating the two would
+  license "fixing" a handler into recording work it did not do.
+
+- **sdk**: Accept the `ext` member every payload schema declares ([#1231](https://github.com/robert-affinidi/verifiable-trust-infrastructure/pull/1231))
+
+SPEC §4.5.1 gives every Trust Task payload an `ext` slot, and the published
+  schemas declare it — `acl/list/0.1` lists `ext` among its properties, as do
+  `policy/list/0.2`, every `vta/memory/*` body, `app-state` writes, config show
+  and patch, and both credential-issuance bodies.
+
+  Sixteen `deny_unknown_fields` structs had no field for it, so a producer doing
+  exactly what the schema permits had its whole document rejected:
+
+      malformed request: payload parse: unknown field `ext`, expected one of
+      `role`, `scope`, `direction`, `subjectPrefix`, `pageSize`, `cursor`
+
+  Seven sibling structs already carry `ext`, with the reasoning written out on
+  each; this completes that work rather than starting it. `deny_unknown_fields`
+  stays: carrying `ext` explicitly is what keeps a *typo* refused, which is the
+  guard that clause was there for, while letting through the one member the spec
+  says is always allowed.
+
+  Found from a browser-based VTA management console: its Access and Policy panes
+  died outright, and the operator was shown a parse error naming a field the
+  spec had told the client it could send. Nothing caught it earlier because
+  whether a caller trips this is decided entirely by whether it populates `ext`
+  — the conformance table exercises the members its fixtures set, and this
+  defect lives in the member they leave unset.
+
+  So the guard is a census over the source rather than another fixture:
+  `payload_ext_census.rs` fails on any `deny_unknown_fields` type under
+  `protocols/` that carries no `ext`, with an exceptions list that has to state
+  a reason. Verified to fail by reverting one struct.
+
+
+
 ## [0.23.4](https://github.com/OpenVTC/verifiable-trust-infrastructure/compare/vta-service-v0.23.3...vta-service-v0.23.4) — 2026-09-01
 
 

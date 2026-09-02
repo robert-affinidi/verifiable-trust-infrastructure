@@ -2,6 +2,61 @@
 
 Notable changes to the published crates. Generated from conventional commits by
 [git-cliff](https://git-cliff.org) when a release is cut — do not edit by hand.
+## [0.16.2](https://github.com/robert-affinidi/verifiable-trust-infrastructure/compare/vti-common-v0.16.1...vti-common-v0.16.2) — 2026-09-02
+
+
+### Added
+
+- **acl**: Add MemoryRead/MemoryWrite and gate the memory tasks on them ([#1234](https://github.com/robert-affinidi/verifiable-trust-infrastructure/pull/1234))
+
+There was no read-only grant on agent memory. The gate in
+  trust_tasks/memory.rs was auth.require_context and nothing else, and a
+  context is binary: any DID that could reach one could also write and
+  delete every memory in it. So an operator could not give an agent
+  read-only access to their own memory, and the --read-only flag in
+  vta-mcp's guard is a client-side glob filter that a caller talking to the
+  VTA directly never encounters.
+
+  The published specification already assumes the split exists.
+  specs/vta/memory/delete/0.1/spec.md reasons about "a VTA whose write
+  capability is granted more freely than its read capability", and about
+  callers holding write without read. There was no read capability and no
+  write capability; there was a context. The ACL supplied nothing finer
+  either - the act axis is (role, allowed_contexts) decoded to a
+  three-valued ActScope, a where with no what.
+
+  Adds Capability::{MemoryRead, MemoryWrite}, wires them through
+  derived_capabilities_for_role, and gates the three handlers. Legacy rows
+  carry no explicit capability set and fall back to the derived mapping, so
+  the roles that write memory today keep writing it.
+
+  Deliberate behaviour changes, both tightenings:
+
+  - reader loses memory write. A read-only consumer of a context should not
+    be able to rewrite the memories in it.
+  - monitor loses memory access entirely. It is the least-privileged role
+    and the Default for AuthClaims, precisely so a fixture that leaks past
+    its expected reach lands somewhere harmless - which it did not, while
+    memory was context-gated alone.
+
+  application keeps both, deliberately and with a test saying why:
+  vta-agent-memory grants exactly that role so the memory service is not
+  the user, and every existing install would otherwise stop saving.
+
+  The capability is checked before the context, so a caller missing it
+  cannot use the reason text to probe which contexts exist.
+
+  Note the canonical Capability enum in the trust-tasks registry
+  (device/_shared/0.1) is already behind this crate - it carries neither
+  sign-trust-task nor credential-write. A spec PR reconciling all four
+  follows separately; this change does not widen that gap unilaterally so
+  much as make it worth closing.
+
+  Implements the orthogonal fix called out in
+  docs/05-design-notes/data-rooms.md 11.1.
+
+
+
 ## [0.16.1](https://github.com/OpenVTC/verifiable-trust-infrastructure/compare/vti-common-v0.16.0...vti-common-v0.16.1) — 2026-09-01
 
 
