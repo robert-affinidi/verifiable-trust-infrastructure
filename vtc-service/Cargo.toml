@@ -122,7 +122,7 @@ path = "src/main.rs"
 [dependencies]
 vti-rooms = { path = "../vti-rooms", version = "0.2" }
 vti-rooms-dtg = { path = "../vti-rooms-dtg" }
-vti-common = { path = "../vti-common", version = "0.22", features = [
+vti-common = { path = "../vti-common", version = "0.23", features = [
   "passkey",
   # `setup` gates the shared dialoguer-driven secrets-prompt helper
   # the wizard calls into.

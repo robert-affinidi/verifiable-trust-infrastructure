@@ -2,6 +2,48 @@
 
 Notable changes to the published crates. Generated from conventional commits by
 [git-cliff](https://git-cliff.org) when a release is cut — do not edit by hand.
+## [0.39.0](https://github.com/robert-affinidi/verifiable-trust-infrastructure/compare/vta-service-v0.38.0...vta-service-v0.39.0) — 2026-09-22
+
+
+### Fixed
+
+- **persona**: A credential-backed value follows its credential, and fails closed ([#1653](https://github.com/robert-affinidi/verifiable-trust-infrastructure/pull/1653))
+
+Credential-backed attributes were never resolved against their
+  credential: not at write (persona/attribute/put rule 3,
+  `credentialNotFound`) and, worse, not on read, where the Provenance
+  contract requires the maintainer to re-derive the value and fail closed
+  once the credential is revoked, expired, archived or deleted. A revoked
+  credential's value went on being presented.
+
+  vta-persona gains `derive`: a `CredentialSource` hook the service
+  implements over the vault, so the persona crate still does not depend
+  on it. The store asks it wherever a credential-backed value is about to
+  be believed:
+  - put: resolves the credential and takes its value (the supplied one is
+    a display cache the spec lets the maintainer overwrite); one it cannot
+    back is refused. `credential_refusal` gives the dispatcher the code.
+  - resolving a face (and so materialising a binding): the credential's
+    current value, or nothing and `stale`.
+  - listing the pool: `stale` with `staleReason`, no value; a withheld
+    value stays withheld.
+  - building a preview: re-derived from the context's copy, which carries
+    the provenance; a withdrawn credential shows stale before approval.
+  - presenting: checked again, so a credential revoked between preview
+    and present is not presented.
+  A pinned kept value is withheld too once its credential is withdrawn.
+
+  vta-vault `receive::stored_claims`: the claims a stored credential
+  carries — SD-JWT-VC re-verified against its issuer and reconstructed,
+  Data-Integrity read as stored, mdoc refused. vta-service's
+  `VaultCredentials` maps held/lifecycle/status/validity window/path to a
+  value or a StaleReason; attribute/put maps a refusal to
+  `persona/attribute/put:credentialNotFound`, and reads the stored value
+  back for its correlation count.
+
+- **auth**: A signed REST sign-in must be addressed to the service that receives it ([#1646](https://github.com/robert-affinidi/verifiable-trust-infrastructure/pull/1646))
+
+
 ## [0.38.0](https://github.com/OpenVTC/verifiable-trust-infrastructure/compare/vta-service-v0.37.1...vta-service-v0.38.0) — 2026-09-22
 
 
